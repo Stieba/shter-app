@@ -452,9 +452,9 @@ export default function ShterKalender() {
             <button key={key} onClick={() => openDay(key)} style={{
               ...s.dayCell,
               ...(isToday ? s.todayCell : {}),
-              ...(hasProposal ? { borderColor: "#B5944B", borderWidth: 2 } : {}),
-              ...(hasConfirmed ? { borderColor: "#6F8068", borderWidth: 2, background: "#1E2A1A" } : {}),
-              ...(iAmBlocked && !hasConfirmed ? { background: myColor + "22", borderColor: !hasProposal ? myColor : undefined } : {}),
+              ...(iAmBlocked ? { background: myColor + "30" } : {}),
+              ...(hasProposal ? { background: "#332500", borderColor: "#B5944B", borderWidth: 2 } : {}),
+              ...(hasConfirmed ? { background: "#0F2918", borderColor: "#4A9060", borderWidth: 2 } : {}),
               ...(inRange ? { background: myColor + "55", borderColor: myColor, borderWidth: 2 } : {}),
             }}>
               <span style={s.dayNum}>{d}</span>
