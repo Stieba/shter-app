@@ -204,6 +204,19 @@ export default function ShterKalender() {
     await loadAll();
   }
 
+  const STATUS_CYCLE = ["leren", "bijna klaar", "performance ready"];
+  const STATUS_STYLE = {
+    "leren":              { color: "#D17555", bg: "#2E1A10", border: "#D1755544" },
+    "bijna klaar":        { color: "#B5944B", bg: "#251E0D", border: "#B5944B44" },
+    "performance ready":  { color: "#6F8068", bg: "#1A2618", border: "#6F806844" },
+  };
+  async function cycleSongStatus(song) {
+    const idx = STATUS_CYCLE.indexOf(song.status || "leren");
+    const next = STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length];
+    await supabase.from("songs").update({ status: next }).eq("id", song.id);
+    await loadAll();
+  }
+
   async function addSongProposal() {
     const { title, artist, motivation, spotify_url, youtube_url } = proposeDraft;
     if (!title.trim() || !artist.trim()) { flashBanner("Titel en artiest zijn verplicht", "err"); return; }
@@ -534,9 +547,25 @@ export default function ShterKalender() {
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
                       <span style={p.confirmed ? s.tagConfirmed : s.tagProposal}>{p.confirmed ? "definitief" : "voorstel"}</span>
-                      <div style={{ display: "flex", gap: 4 }}>
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
                         <a href={makeICSUrl(p.date, p.time, p.label)} style={s.calBtn} title="Toevoegen aan iPhone/iCal agenda">📅 iCal</a>
                         <a href={makeGCalUrl(p.date, p.time, p.label)} target="_blank" rel="noreferrer" style={s.calBtn} title="Toevoegen aan Google agenda">📅 Google</a>
+                        {(() => {
+                          const [y, mo, d] = p.date.split("-");
+                          const dow = DAY_NAMES_FULL[new Date(parseInt(y), parseInt(mo)-1, parseInt(d)).getDay()];
+                          const dateStr = `${dow} ${parseInt(d)} ${MONTH_NAMES[parseInt(mo)-1]}`;
+                          const afwezig = Object.keys(blocks[p.date] || {});
+                          let msg = `🎸 SHTER repetitie herinnering\n📅 ${dateStr}\n🕐 ${p.time}${p.label ? `\n📍 ${p.label}` : ""}`;
+                          if (afwezig.length) msg += `\n🚫 Kan niet: ${afwezig.join(", ")}`;
+                          msg += "\n\nWie is er?";
+                          return (
+                            <a href={`https://wa.me/?text=${encodeURIComponent(msg)}`} target="_blank" rel="noreferrer"
+                              style={{ ...s.calBtn, background: "#1A2B1A", borderColor: "#2A5A2A", color: "#5CB85C" }}
+                              title="Stuur herinnering via WhatsApp">
+                              💬 WhatsApp
+                            </a>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -646,6 +675,16 @@ export default function ShterKalender() {
                         <div style={s.setlistArtist}>{song.artist}</div>
                       </div>
                       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        {(() => {
+                          const st = song.status || "leren";
+                          const ss = STATUS_STYLE[st];
+                          return (
+                            <button onClick={() => cycleSongStatus(song)}
+                              style={{ fontSize: 10, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: ss.color, background: ss.bg, border: `1px solid ${ss.border}`, borderRadius: 6, padding: "4px 8px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                              {st}
+                            </button>
+                          );
+                        })()}
                         <button style={{ ...s.docsToggleBtn, ...(isOpen ? { background: "#3A3024", color: "#EDE0CC" } : {}) }}
                           onClick={() => setOpenDocsFor(isOpen ? null : song.id)}>
                           docs {docs.length > 0 ? `(${docs.length})` : ""}
