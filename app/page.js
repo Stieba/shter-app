@@ -54,6 +54,7 @@ export default function ShterKalender() {
   const [blocks, setBlocks] = useState({});
   const [proposals, setProposals] = useState({});
   const [songs, setSongs] = useState([]);
+  const [songDocs, setSongDocs] = useState({});
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -86,20 +87,29 @@ export default function ShterKalender() {
       { data: blockRows, error: bErr },
       { data: propRows, error: pErr },
       { data: songRows, error: sErr },
+      { data: docRows, error: dErr },
     ] = await Promise.all([
       supabase.from("members").select("*").order("sort_order"),
       supabase.from("blocks").select("*"),
       supabase.from("proposals").select("*"),
       supabase.from("songs").select("*").order("sort_order"),
+      supabase.from("song_documents").select("*").order("created_at"),
     ]);
 
-    if (mErr || bErr || pErr || sErr) {
+    if (mErr || bErr || pErr || sErr || dErr) {
       flashBanner("Kon gegevens niet laden — controleer internetverbinding", "err");
       return;
     }
 
     setMembers(memberRows || []);
     setSongs(songRows || []);
+
+    const docsMap = {};
+    for (const row of docRows || []) {
+      if (!docsMap[row.song_id]) docsMap[row.song_id] = [];
+      docsMap[row.song_id].push(row);
+    }
+    setSongDocs(docsMap);
 
     const blockMap = {};
     for (const row of blockRows || []) {
@@ -127,6 +137,7 @@ export default function ShterKalender() {
       .on("postgres_changes", { event: "*", schema: "public", table: "proposals" }, loadAll)
       .on("postgres_changes", { event: "*", schema: "public", table: "members" }, loadAll)
       .on("postgres_changes", { event: "*", schema: "public", table: "songs" }, loadAll)
+      .on("postgres_changes", { event: "*", schema: "public", table: "song_documents" }, loadAll)
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [loadAll]);
@@ -148,13 +159,22 @@ export default function ShterKalender() {
 
   async function uploadDocument(songId, file) {
     setSaving(true);
-    const path = `song-${songId}.pdf`;
-    const { error: upErr } = await supabase.storage.from("documents").upload(path, file, { upsert: true });
-    if (upErr) { flashBanner("PDF uploaden mislukt", "err"); setSaving(false); return; }
+    const timestamp = Date.now();
+    const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+    const path = `song-${songId}-${timestamp}-${safeName}`;
+    const { error: upErr } = await supabase.storage.from("documents").upload(path, file, { upsert: false });
+    if (upErr) { flashBanner("Uploaden mislukt", "err"); setSaving(false); return; }
     const { data } = supabase.storage.from("documents").getPublicUrl(path);
-    await supabase.from("songs").update({ document_url: data.publicUrl }).eq("id", songId);
+    await supabase.from("song_documents").insert({ song_id: songId, name: file.name, url: data.publicUrl });
     setSaving(false);
-    flashBanner("PDF opgeslagen!", "ok");
+    flashBanner(`"${file.name}" opgeslagen!`, "ok");
+    await loadAll();
+  }
+
+  async function deleteDocument(docId, path) {
+    setSaving(true);
+    await supabase.from("song_documents").delete().eq("id", docId);
+    setSaving(false);
     await loadAll();
   }
 
@@ -586,35 +606,49 @@ export default function ShterKalender() {
             <div style={styles.sheetDate}>♪ Setlist</div>
             <div style={{ fontSize: 12, color: "#8A7A60", fontFamily: "monospace" }}>sleep om volgorde aan te passen</div>
             <div style={styles.setlistList}>
-              {songs.map((song, idx) => (
-                <div
-                  key={song.id}
-                  draggable
-                  onDragStart={() => onDragStart(idx)}
-                  onDragOver={(e) => onDragOver(e, idx)}
-                  onDragEnd={onDragEnd}
-                  style={{ ...styles.setlistRow, ...(dragIdx === idx ? { opacity: 0.5 } : {}) }}
-                >
-                  <div style={styles.setlistLeft}>
-                    <span style={styles.setlistNum}>{idx + 1}</span>
-                    <div>
-                      <div style={styles.setlistTitle}>{song.title}</div>
-                      <div style={styles.setlistArtist}>{song.artist}</div>
+              {songs.map((song, idx) => {
+                const docs = songDocs[song.id] || [];
+                return (
+                  <div
+                    key={song.id}
+                    draggable
+                    onDragStart={() => onDragStart(idx)}
+                    onDragOver={(e) => onDragOver(e, idx)}
+                    onDragEnd={onDragEnd}
+                    style={{ ...styles.setlistRow, ...(dragIdx === idx ? { opacity: 0.5 } : {}) }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={styles.setlistTop}>
+                        <span style={styles.setlistNum}>{idx + 1}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={styles.setlistTitle}>{song.title}</div>
+                          <div style={styles.setlistArtist}>{song.artist}</div>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <label style={styles.pdfUploadBtn} title="document uploaden">
+                            + doc
+                            <input type="file" style={{ display: "none" }}
+                              onChange={(e) => { if (e.target.files[0]) uploadDocument(song.id, e.target.files[0]); }} />
+                          </label>
+                          <span style={styles.dragHandle}>⠿</span>
+                        </div>
+                      </div>
+                      {docs.length > 0 && (
+                        <div style={styles.docList}>
+                          {docs.map((doc) => (
+                            <div key={doc.id} style={styles.docRow}>
+                              <a href={doc.url} download={doc.name} target="_blank" rel="noreferrer" style={styles.docLink}>
+                                📄 {doc.name}
+                              </a>
+                              <button style={styles.docDeleteBtn} onClick={() => deleteDocument(doc.id)}>✕</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <div style={styles.setlistRight}>
-                    {song.document_url ? (
-                      <a href={song.document_url} target="_blank" rel="noreferrer" style={styles.pdfLink}>📄 PDF</a>
-                    ) : null}
-                    <label style={styles.pdfUploadBtn} title="PDF uploaden">
-                      {song.document_url ? "↑" : "+ PDF"}
-                      <input type="file" accept="application/pdf" style={{ display: "none" }}
-                        onChange={(e) => { if (e.target.files[0]) uploadDocument(song.id, e.target.files[0]); }} />
-                    </label>
-                    <span style={styles.dragHandle}>⠿</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             <button style={styles.sheetCancelBtn} onClick={() => setShowSetlist(false)}>Sluiten</button>
           </div>
@@ -716,13 +750,15 @@ const styles = {
   proposalDeleteBtn: { background: "transparent", border: "none", color: "#6A5A45", fontSize: 14, cursor: "pointer", padding: "4px 6px" },
   proposalForm: { display: "flex", gap: 8, marginTop: 4 },
   setlistList: { display: "flex", flexDirection: "column", gap: 6 },
-  setlistRow: { display: "flex", alignItems: "center", justifyContent: "space-between", background: "#1C1812", border: "1px solid #3A3024", borderRadius: 10, padding: "12px 14px", cursor: "grab", userSelect: "none" },
-  setlistLeft: { display: "flex", alignItems: "center", gap: 12 },
-  setlistNum: { fontSize: 18, fontWeight: 900, color: "#4A3F2E", fontFamily: "monospace", width: 22, textAlign: "right" },
+  setlistRow: { background: "#1C1812", border: "1px solid #3A3024", borderRadius: 10, padding: "12px 14px", cursor: "grab", userSelect: "none" },
+  setlistTop: { display: "flex", alignItems: "center", gap: 12 },
+  setlistNum: { fontSize: 18, fontWeight: 900, color: "#4A3F2E", fontFamily: "monospace", width: 22, textAlign: "right", flexShrink: 0 },
   setlistTitle: { fontSize: 14, fontWeight: 600, color: "#EDE0CC" },
   setlistArtist: { fontSize: 12, color: "#8A7A60", marginTop: 2 },
-  setlistRight: { display: "flex", alignItems: "center", gap: 8, flexShrink: 0 },
-  pdfLink: { fontSize: 11, color: "#B5944B", textDecoration: "none", background: "#251E0D", border: "1px solid #B5944B44", borderRadius: 6, padding: "4px 8px" },
-  pdfUploadBtn: { fontSize: 11, color: "#8A7A60", background: "#2A2319", border: "1px solid #3A3024", borderRadius: 6, padding: "4px 8px", cursor: "pointer" },
-  dragHandle: { fontSize: 16, color: "#4A3F2E", cursor: "grab" },
+  pdfUploadBtn: { fontSize: 11, color: "#8A7A60", background: "#2A2319", border: "1px solid #3A3024", borderRadius: 6, padding: "4px 8px", cursor: "pointer", flexShrink: 0 },
+  dragHandle: { fontSize: 16, color: "#4A3F2E", cursor: "grab", flexShrink: 0 },
+  docList: { display: "flex", flexDirection: "column", gap: 4, marginTop: 8, marginLeft: 34 },
+  docRow: { display: "flex", alignItems: "center", gap: 6 },
+  docLink: { fontSize: 12, color: "#B5944B", textDecoration: "none", background: "#251E0D", border: "1px solid #B5944B44", borderRadius: 6, padding: "4px 10px", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  docDeleteBtn: { background: "transparent", border: "none", color: "#6A5A45", fontSize: 13, cursor: "pointer", padding: "2px 6px", flexShrink: 0 },
 };
