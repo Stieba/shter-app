@@ -21,7 +21,7 @@ function todayKey() {
 }
 function formatNice(key) {
   const [, m, d] = key.split("-");
-  return `${parseInt(d, 10)} ${MONTH_NAMES[parseInt(m, 10) - 1]}`;
+  return `${parseInt(d)} ${MONTH_NAMES[parseInt(m) - 1]}`;
 }
 function keysInRange(startKey, endKey) {
   let start = parseDateKey(startKey);
@@ -46,7 +46,7 @@ function getMonthGrid(year, month) {
   return cells;
 }
 function fileIcon(name) {
-  const ext = name.split(".").pop().toLowerCase();
+  const ext = (name || "").split(".").pop().toLowerCase();
   if (["mp4", "mov", "avi", "mkv", "webm"].includes(ext)) return "🎬";
   if (["mp3", "wav", "aac", "flac", "m4a"].includes(ext)) return "🎵";
   if (ext === "pdf") return "📄";
@@ -62,6 +62,7 @@ export default function ShterKalender() {
   const [proposals, setProposals] = useState({});
   const [songs, setSongs] = useState([]);
   const [songDocs, setSongDocs] = useState({});
+  const [songProposals, setSongProposals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -80,6 +81,8 @@ export default function ShterKalender() {
   const [dragIdx, setDragIdx] = useState(null);
   const [openDocsFor, setOpenDocsFor] = useState(null);
   const [linkDrafts, setLinkDrafts] = useState({});
+  const [showProposeForm, setShowProposeForm] = useState(false);
+  const [proposeDraft, setProposeDraft] = useState({ title: "", artist: "", motivation: "", spotify_url: "", youtube_url: "" });
   const bannerTimer = useRef(null);
 
   function flashBanner(text, tone = "ok") {
@@ -95,21 +98,24 @@ export default function ShterKalender() {
       { data: propRows, error: pErr },
       { data: songRows, error: sErr },
       { data: docRows, error: dErr },
+      { data: spRows, error: spErr },
     ] = await Promise.all([
       supabase.from("members").select("*").order("sort_order"),
       supabase.from("blocks").select("*"),
       supabase.from("proposals").select("*"),
       supabase.from("songs").select("*").order("sort_order"),
       supabase.from("song_documents").select("*").order("created_at"),
+      supabase.from("song_proposals").select("*").order("created_at"),
     ]);
 
-    if (mErr || bErr || pErr || sErr || dErr) {
-      flashBanner("Kon gegevens niet laden — controleer internetverbinding", "err");
+    if (mErr || bErr || pErr || sErr || dErr || spErr) {
+      flashBanner("Kon gegevens niet laden", "err");
       return;
     }
 
     setMembers(memberRows || []);
     setSongs(songRows || []);
+    setSongProposals(spRows || []);
 
     const docsMap = {};
     for (const row of docRows || []) {
@@ -129,23 +135,20 @@ export default function ShterKalender() {
     const propMap = {};
     for (const row of propRows || []) {
       if (!propMap[row.date]) propMap[row.date] = [];
-      propMap[row.date].push({
-        id: row.id, time: row.time, label: row.label || "",
-        by: row.proposed_by, confirmed: row.confirmed,
-      });
+      propMap[row.date].push({ id: row.id, time: row.time, label: row.label || "", by: row.proposed_by, confirmed: row.confirmed });
     }
     setProposals(propMap);
   }, []);
 
   useEffect(() => {
     (async () => { await loadAll(); setLoading(false); })();
-    const channel = supabase
-      .channel("shter-kalender-changes")
+    const channel = supabase.channel("shter-changes")
       .on("postgres_changes", { event: "*", schema: "public", table: "blocks" }, loadAll)
       .on("postgres_changes", { event: "*", schema: "public", table: "proposals" }, loadAll)
       .on("postgres_changes", { event: "*", schema: "public", table: "members" }, loadAll)
       .on("postgres_changes", { event: "*", schema: "public", table: "songs" }, loadAll)
       .on("postgres_changes", { event: "*", schema: "public", table: "song_documents" }, loadAll)
+      .on("postgres_changes", { event: "*", schema: "public", table: "song_proposals" }, loadAll)
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [loadAll]);
@@ -156,8 +159,7 @@ export default function ShterKalender() {
     const { error: upErr } = await supabase.storage.from("avatars").upload(path, file, { upsert: true });
     if (upErr) { flashBanner("Foto uploaden mislukt", "err"); return; }
     const { data } = supabase.storage.from("avatars").getPublicUrl(path);
-    const url = data.publicUrl + "?t=" + Date.now();
-    await supabase.from("members").update({ avatar_url: url }).eq("name", memberName);
+    await supabase.from("members").update({ avatar_url: data.publicUrl + "?t=" + Date.now() }).eq("name", memberName);
     flashBanner("Profielfoto opgeslagen!", "ok");
     await loadAll();
   }
@@ -170,24 +172,54 @@ export default function ShterKalender() {
     const { error: upErr } = await supabase.storage.from("documents").upload(path, file, { upsert: false });
     if (upErr) { flashBanner("Uploaden mislukt: " + upErr.message, "err"); setSaving(false); return; }
     const { data } = supabase.storage.from("documents").getPublicUrl(path);
-    const { error: dbErr } = await supabase.from("song_documents").insert({
-      song_id: songId, name: file.name, url: data.publicUrl,
-    });
-    if (dbErr) { flashBanner("Opslaan mislukt: " + dbErr.message, "err"); setSaving(false); return; }
+    const { error: dbErr } = await supabase.from("song_documents").insert({ song_id: songId, name: file.name, url: data.publicUrl });
+    if (dbErr) { flashBanner("Opslaan mislukt", "err"); setSaving(false); return; }
     setSaving(false);
     flashBanner(`"${file.name}" geüpload!`, "ok");
     await loadAll();
   }
 
   async function deleteDocument(docId) {
-    setSaving(true);
     await supabase.from("song_documents").delete().eq("id", docId);
-    setSaving(false);
     await loadAll();
   }
 
   async function saveSongLink(songId, field, url) {
     await supabase.from("songs").update({ [field]: url || null }).eq("id", songId);
+    await loadAll();
+  }
+
+  async function addSongProposal() {
+    const { title, artist, motivation, spotify_url, youtube_url } = proposeDraft;
+    if (!title.trim() || !artist.trim()) { flashBanner("Titel en artiest zijn verplicht", "err"); return; }
+    setSaving(true);
+    const { error } = await supabase.from("song_proposals").insert({
+      title: title.trim(), artist: artist.trim(),
+      motivation: motivation.trim() || null,
+      spotify_url: spotify_url.trim() || null,
+      youtube_url: youtube_url.trim() || null,
+      proposed_by: currentMember,
+    });
+    setSaving(false);
+    if (error) { flashBanner("Voorstel mislukt", "err"); return; }
+    setProposeDraft({ title: "", artist: "", motivation: "", spotify_url: "", youtube_url: "" });
+    setShowProposeForm(false);
+    flashBanner("Voorstel toegevoegd!", "ok");
+    await loadAll();
+  }
+
+  async function deleteSongProposal(id) {
+    await supabase.from("song_proposals").delete().eq("id", id);
+    await loadAll();
+  }
+
+  async function approveSongProposal(sp) {
+    setSaving(true);
+    const maxOrder = songs.length > 0 ? Math.max(...songs.map(s => s.sort_order)) + 1 : 0;
+    await supabase.from("songs").insert({ title: sp.title, artist: sp.artist, sort_order: maxOrder, spotify_url: sp.spotify_url, youtube_url: sp.youtube_url });
+    await supabase.from("song_proposals").delete().eq("id", sp.id);
+    setSaving(false);
+    flashBanner(`"${sp.title}" toegevoegd aan setlist!`, "ok");
     await loadAll();
   }
 
@@ -229,8 +261,7 @@ export default function ShterKalender() {
     if (!selectedDay || !currentMember || !proposalTimeDraft) return;
     setSaving(true);
     const { error } = await supabase.from("proposals").insert({
-      date: selectedDay, time: proposalTimeDraft,
-      label: proposalLabelDraft.trim(), proposed_by: currentMember, confirmed: false,
+      date: selectedDay, time: proposalTimeDraft, label: proposalLabelDraft.trim(), proposed_by: currentMember, confirmed: false,
     });
     setSaving(false);
     if (error) flashBanner("Voorstel toevoegen mislukt", "err");
@@ -248,9 +279,8 @@ export default function ShterKalender() {
 
   async function removeProposal(id) {
     setSaving(true);
-    const { error } = await supabase.from("proposals").delete().eq("id", id);
+    await supabase.from("proposals").delete().eq("id", id);
     setSaving(false);
-    if (error) flashBanner("Verwijderen mislukt", "err");
     await loadAll();
   }
 
@@ -270,10 +300,8 @@ export default function ShterKalender() {
       else setRangeEnd(key);
       return;
     }
-    setSelectedDay(key);
-    setNoteDraft(blocks[key]?.[currentMember] || "");
-    setProposalTimeDraft("20:00");
-    setProposalLabelDraft("");
+    setSelectedDay(key); setNoteDraft(blocks[key]?.[currentMember] || "");
+    setProposalTimeDraft("20:00"); setProposalLabelDraft("");
   }
   function closeDay() { setSelectedDay(null); setNoteDraft(""); }
   function confirmDayAction() { if (!selectedDay) return; toggleBlock(selectedDay, noteDraft); closeDay(); }
@@ -285,7 +313,6 @@ export default function ShterKalender() {
   function cancelRange() { setRangeStart(null); setRangeEnd(null); setRangeNote(""); setRangeMode(false); }
   function prevMonth() { if (month === 0) { setMonth(11); setYear(y => y - 1); } else setMonth(m => m - 1); }
   function nextMonth() { if (month === 11) { setMonth(0); setYear(y => y + 1); } else setMonth(m => m + 1); }
-
   function onDragStart(idx) { setDragIdx(idx); }
   function onDragOver(e, idx) {
     e.preventDefault();
@@ -293,8 +320,7 @@ export default function ShterKalender() {
     const next = [...songs];
     const [moved] = next.splice(dragIdx, 1);
     next.splice(idx, 0, moved);
-    setDragIdx(idx);
-    setSongs(next);
+    setDragIdx(idx); setSongs(next);
   }
   function onDragEnd() { reorderSongs(songs); setDragIdx(null); }
 
@@ -310,7 +336,6 @@ export default function ShterKalender() {
   const colorFor = (name) => members.find((m) => m.name === name)?.color || "#8A7A60";
   const avatarFor = (name) => members.find((m) => m.name === name)?.avatar_url || null;
 
-  // ---- Wie ben jij scherm ----
   if (!currentMember) {
     return (
       <div style={s.app}>
@@ -337,22 +362,15 @@ export default function ShterKalender() {
               </div>
             ))}
           </div>
-          {members.length < 10 && (
-            <button style={s.ghostBtn} onClick={() => setShowAddMember(true)}>+ lid toevoegen</button>
-          )}
+          {members.length < 10 && <button style={s.ghostBtn} onClick={() => setShowAddMember(true)}>+ lid toevoegen</button>}
           {showAddMember && (
             <div style={s.inlineAdd}>
               <input autoFocus value={newMemberDraft} onChange={(e) => setNewMemberDraft(e.target.value)}
-                placeholder="naam" style={s.input}
-                onKeyDown={(e) => { if (e.key === "Enter") addMember(); }} />
+                placeholder="naam" style={s.input} onKeyDown={(e) => { if (e.key === "Enter") addMember(); }} />
               <button style={s.smallBtn} onClick={addMember}>toevoegen</button>
             </div>
           )}
-          {banner && (
-            <div style={{ ...(banner.tone === "err" ? s.toastStaticErr : s.toastStaticOk), marginTop: 16 }}>
-              {banner.text}
-            </div>
-          )}
+          {banner && <div style={{ ...(banner.tone === "err" ? s.toastStaticErr : s.toastStaticOk), marginTop: 16 }}>{banner.text}</div>}
         </div>
       </div>
     );
@@ -368,7 +386,6 @@ export default function ShterKalender() {
     <div style={s.app}>
       <div style={s.bgPoster} />
 
-      {/* Header */}
       <header style={s.header}>
         <div>
           <div style={s.logoSmall}>SHTER</div>
@@ -376,24 +393,19 @@ export default function ShterKalender() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button style={s.setlistHeaderBtn} onClick={() => setShowSetlist(true)}>♪ setlist</button>
-          <button style={{ ...s.youBadge, borderColor: myColor }} onClick={() => setCurrentMember(null)} title="wisselen">
-            {myAvatar
-              ? <img src={myAvatar} alt={currentMember} style={s.avatarBadge} />
-              : <span style={{ ...s.dot, background: myColor }} />
-            }
+          <button style={{ ...s.youBadge, borderColor: myColor }} onClick={() => setCurrentMember(null)}>
+            {myAvatar ? <img src={myAvatar} alt={currentMember} style={s.avatarBadge} /> : <span style={{ ...s.dot, background: myColor }} />}
             {currentMember}
           </button>
         </div>
       </header>
 
-      {/* Maandnavigatie */}
       <div style={s.monthNav}>
         <button style={s.navBtn} onClick={prevMonth}>‹</button>
         <div style={s.monthLabel}>{MONTH_NAMES[month]} {year}</div>
         <button style={s.navBtn} onClick={nextMonth}>›</button>
       </div>
 
-      {/* Blokkeer tool */}
       <div style={s.toolRow}>
         {!rangeMode
           ? <button style={s.toolBtn} onClick={() => setRangeMode(true)}>van — tot blokkeren</button>
@@ -419,10 +431,10 @@ export default function ShterKalender() {
         </div>
       )}
 
-      {/* Kalender */}
       <div style={s.dayHeaderRow}>
         {DAY_NAMES.map((d) => <div key={d} style={s.dayHeaderCell}>{d}</div>)}
       </div>
+
       <div style={s.grid}>
         {grid.map((d, idx) => {
           if (d === null) return <div key={`e-${idx}`} style={s.emptyCell} />;
@@ -459,14 +471,12 @@ export default function ShterKalender() {
         })}
       </div>
 
-      {/* Legenda */}
+      {/* Legenda: avatar + kleurbol + naam */}
       <div style={s.legend}>
         {members.map((m) => (
           <div key={m.id} style={s.legendItem}>
-            {m.avatar_url
-              ? <img src={m.avatar_url} alt={m.name} style={s.avatarTiny} />
-              : <span style={{ ...s.dot, background: m.color }} />
-            }
+            {m.avatar_url && <img src={m.avatar_url} alt={m.name} style={s.avatarTiny} />}
+            <span style={{ ...s.dot, background: m.color }} />
             <span style={{ opacity: m.name === currentMember ? 1 : 0.6 }}>{m.name}</span>
           </div>
         ))}
@@ -521,20 +531,24 @@ export default function ShterKalender() {
             <div style={s.sheetDate}>
               {(() => { const [, mo, d] = selectedDay.split("-"); return `${parseInt(d)} ${MONTH_NAMES[parseInt(mo) - 1]} ${year}`; })()}
             </div>
+
+            {/* Wie kan niet */}
             {Object.keys(blocks[selectedDay] || {}).length > 0 && (
-              <div style={s.whoList}>
+              <div style={s.unavailableBox}>
+                <div style={s.unavailableLabel}>🚫 kan niet</div>
                 {Object.entries(blocks[selectedDay] || {}).map(([name, note]) => (
                   <div key={name} style={s.whoRow}>
                     {avatarFor(name)
                       ? <img src={avatarFor(name)} alt={name} style={s.avatarSmall} />
                       : <span style={{ ...s.dot, background: colorFor(name) }} />
                     }
-                    <span style={s.whoName}>{name}</span>
+                    <span style={{ ...s.whoName, color: colorFor(name) }}>{name}</span>
                     {note ? <span style={s.whoNote}>— {note}</span> : null}
                   </div>
                 ))}
               </div>
             )}
+
             <div style={s.sheetActionLabel}>
               {blocks[selectedDay]?.[currentMember] !== undefined ? "Jij hebt deze dag geblokkeerd" : "Markeer als niet beschikbaar"}
             </div>
@@ -547,6 +561,7 @@ export default function ShterKalender() {
               </button>
               <button style={s.sheetCancelBtn} onClick={closeDay}>Sluiten</button>
             </div>
+
             <div style={s.sheetDivider} />
             <div style={s.sheetActionLabel}>Repetitietijd voorstellen</div>
             {(proposals[selectedDay] || []).length > 0 && (
@@ -581,24 +596,22 @@ export default function ShterKalender() {
 
       {/* Setlist overlay */}
       {showSetlist && (
-        <div style={s.sheetOverlay} onClick={() => { setShowSetlist(false); setOpenDocsFor(null); }}>
-          <div style={{ ...s.sheet, maxHeight: "90vh" }} onClick={(e) => e.stopPropagation()}>
+        <div style={s.sheetOverlay} onClick={() => { setShowSetlist(false); setOpenDocsFor(null); setShowProposeForm(false); }}>
+          <div style={{ ...s.sheet, maxHeight: "92vh" }} onClick={(e) => e.stopPropagation()}>
             <div style={s.sheetHandle} />
             <div style={s.sheetDate}>♪ Setlist</div>
-            <div style={{ fontSize: 12, color: "#8A7A60", fontFamily: "monospace", marginBottom: 4 }}>sleep om volgorde aan te passen</div>
+            <div style={{ fontSize: 12, color: "#8A7A60", fontFamily: "monospace" }}>sleep om volgorde aan te passen</div>
 
+            {/* Bevestigde setlist */}
             <div style={s.setlistList}>
               {songs.map((song, idx) => {
                 const docs = songDocs[String(song.id)] || [];
                 const isOpen = openDocsFor === song.id;
                 const draft = linkDrafts[song.id] || {};
-
                 return (
                   <div key={song.id} draggable onDragStart={() => onDragStart(idx)}
                     onDragOver={(e) => onDragOver(e, idx)} onDragEnd={onDragEnd}
                     style={{ ...s.setlistRow, opacity: dragIdx === idx ? 0.5 : 1 }}>
-
-                    {/* Nummertitel rij */}
                     <div style={s.setlistTop}>
                       <span style={s.setlistNum}>{idx + 1}</span>
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -606,68 +619,46 @@ export default function ShterKalender() {
                         <div style={s.setlistArtist}>{song.artist}</div>
                       </div>
                       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                        <button
-                          style={{ ...s.docsToggleBtn, ...(isOpen ? { background: "#3A3024", color: "#EDE0CC" } : {}) }}
-                          onClick={() => setOpenDocsFor(isOpen ? null : song.id)}
-                        >
+                        <button style={{ ...s.docsToggleBtn, ...(isOpen ? { background: "#3A3024", color: "#EDE0CC" } : {}) }}
+                          onClick={() => setOpenDocsFor(isOpen ? null : song.id)}>
                           docs {docs.length > 0 ? `(${docs.length})` : ""}
                         </button>
                         <span style={s.dragHandle}>⠿</span>
                       </div>
                     </div>
-
-                    {/* Docs paneel */}
                     {isOpen && (
                       <div style={s.docsPanel}>
-
-                        {/* Bestaande docs */}
                         {docs.length > 0 && (
                           <div style={s.docList}>
                             {docs.map((doc) => (
                               <div key={doc.id} style={s.docRow}>
                                 <span style={s.docIcon}>{fileIcon(doc.name)}</span>
-                                <a href={doc.url} download={doc.name} target="_blank" rel="noreferrer" style={s.docLink}>
-                                  {doc.name}
-                                </a>
+                                <a href={doc.url} download={doc.name} target="_blank" rel="noreferrer" style={s.docLink}>{doc.name}</a>
                                 <button style={s.docDeleteBtn} onClick={() => deleteDocument(doc.id)}>✕</button>
                               </div>
                             ))}
                           </div>
                         )}
-
-                        {/* Upload */}
                         <label style={s.uploadArea}>
                           <span>+ bestand uploaden (PDF, video, audio…)</span>
                           <input type="file" style={{ display: "none" }}
                             onChange={(e) => { if (e.target.files[0]) uploadDocument(song.id, e.target.files[0]); }} />
                         </label>
-
-                        {/* Links */}
                         <div style={s.linkRow}>
                           <span style={s.linkIcon}>🎵</span>
-                          <input
-                            value={draft.spotify_url ?? (song.spotify_url || "")}
-                            onChange={(e) => setLinkDrafts(prev => ({ ...prev, [song.id]: { ...prev[song.id], spotify_url: e.target.value } }))}
+                          <input value={draft.spotify_url ?? (song.spotify_url || "")}
+                            onChange={(e) => setLinkDrafts(p => ({ ...p, [song.id]: { ...p[song.id], spotify_url: e.target.value } }))}
                             onBlur={(e) => saveSongLink(song.id, "spotify_url", e.target.value)}
-                            placeholder="Spotify link"
-                            style={s.linkInput}
-                          />
-                          {song.spotify_url && (
-                            <a href={song.spotify_url} target="_blank" rel="noreferrer" style={s.linkOpenBtn}>↗</a>
-                          )}
+                            placeholder="Spotify link" style={s.linkInput} />
+                          {song.spotify_url && <a href={song.spotify_url} target="_blank" rel="noreferrer" style={s.linkOpenBtn}>↗</a>}
                         </div>
                         <div style={s.linkRow}>
                           <span style={s.linkIcon}>▶</span>
-                          <input
-                            value={draft.youtube_url ?? (song.youtube_url || "")}
-                            onChange={(e) => setLinkDrafts(prev => ({ ...prev, [song.id]: { ...prev[song.id], youtube_url: e.target.value } }))}
+                          <input value={draft.youtube_url ?? (song.youtube_url || "")}
+                            onChange={(e) => setLinkDrafts(p => ({ ...p, [song.id]: { ...p[song.id], youtube_url: e.target.value } }))}
                             onBlur={(e) => saveSongLink(song.id, "youtube_url", e.target.value)}
-                            placeholder="YouTube link"
-                            style={s.linkInput}
-                          />
-                          {song.youtube_url && (
-                            <a href={song.youtube_url} target="_blank" rel="noreferrer" style={s.linkOpenBtn}>↗</a>
-                          )}
+                            placeholder="YouTube link" style={s.linkInput} />
+                          {song.youtube_url && <a href={song.youtube_url} target="_blank" rel="noreferrer" style={s.linkOpenBtn}>↗</a>}
                         </div>
                       </div>
                     )}
@@ -676,7 +667,60 @@ export default function ShterKalender() {
               })}
             </div>
 
-            <button style={{ ...s.sheetCancelBtn, marginTop: 8 }} onClick={() => { setShowSetlist(false); setOpenDocsFor(null); }}>Sluiten</button>
+            {/* Scheiding: voorgestelde nummers */}
+            <div style={s.proposalSectionHeader}>
+              <div style={s.proposalSectionTitle}>💡 Voorgestelde nummers</div>
+              <button style={s.proposeBtn} onClick={() => setShowProposeForm(v => !v)}>
+                {showProposeForm ? "annuleer" : "+ nummer voorstellen"}
+              </button>
+            </div>
+
+            {/* Voorstelformulier */}
+            {showProposeForm && (
+              <div style={s.proposeForm}>
+                <input value={proposeDraft.title} onChange={(e) => setProposeDraft(d => ({ ...d, title: e.target.value }))}
+                  placeholder="Titel *" style={s.noteInput} />
+                <input value={proposeDraft.artist} onChange={(e) => setProposeDraft(d => ({ ...d, artist: e.target.value }))}
+                  placeholder="Artiest *" style={s.noteInput} />
+                <input value={proposeDraft.motivation} onChange={(e) => setProposeDraft(d => ({ ...d, motivation: e.target.value }))}
+                  placeholder="Motivatie (waarom dit nummer?)" style={s.noteInput} />
+                <input value={proposeDraft.spotify_url} onChange={(e) => setProposeDraft(d => ({ ...d, spotify_url: e.target.value }))}
+                  placeholder="🎵 Spotify link (optioneel)" style={s.noteInput} />
+                <input value={proposeDraft.youtube_url} onChange={(e) => setProposeDraft(d => ({ ...d, youtube_url: e.target.value }))}
+                  placeholder="▶ YouTube link (optioneel)" style={s.noteInput} />
+                <button style={{ ...s.sheetMainBtn, background: myColor }} onClick={addSongProposal}>
+                  Voorstel indienen
+                </button>
+              </div>
+            )}
+
+            {/* Lijst voorgestelde nummers */}
+            {songProposals.length === 0 && !showProposeForm && (
+              <div style={s.upcomingEmpty}>nog geen voorgestelde nummers</div>
+            )}
+            <div style={s.setlistList}>
+              {songProposals.map((sp) => (
+                <div key={sp.id} style={s.songProposalRow}>
+                  <div style={s.setlistTop}>
+                    <span style={s.proposalBadge}>voorstel</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={s.setlistTitle}>{sp.title}</div>
+                      <div style={s.setlistArtist}>{sp.artist}</div>
+                      {sp.motivation && <div style={s.proposalMotivation}>"{sp.motivation}"</div>}
+                      <div style={s.upcomingBy}>door {sp.proposed_by}</div>
+                    </div>
+                  </div>
+                  <div style={s.songProposalActions}>
+                    {sp.spotify_url && <a href={sp.spotify_url} target="_blank" rel="noreferrer" style={{ ...s.linkOpenBtn, fontSize: 12 }}>🎵 Spotify</a>}
+                    {sp.youtube_url && <a href={sp.youtube_url} target="_blank" rel="noreferrer" style={{ ...s.linkOpenBtn, fontSize: 12 }}>▶ YouTube</a>}
+                    <button style={s.approveBtn} onClick={() => approveSongProposal(sp)}>→ setlist</button>
+                    <button style={s.docDeleteBtn} onClick={() => deleteSongProposal(sp.id)}>✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button style={{ ...s.sheetCancelBtn, marginTop: 8 }} onClick={() => { setShowSetlist(false); setOpenDocsFor(null); setShowProposeForm(false); }}>Sluiten</button>
           </div>
         </div>
       )}
@@ -689,8 +733,6 @@ const s = {
   bgPoster: { position: "fixed", inset: 0, backgroundImage: "url('/shter-poster.jpg')", backgroundSize: "cover", backgroundPosition: "center top", opacity: 0.07, zIndex: 0, pointerEvents: "none" },
   loadingScreen: { minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, background: "#1C1812" },
   loadingMark: { fontFamily: "'Arial Black', Impact, sans-serif", fontWeight: 900, fontSize: 48, color: "#C9744A" },
-
-  // Identity
   identityScreen: { minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px 20px", gap: 8, position: "relative", zIndex: 1 },
   logo: { fontFamily: "'Arial Black', Impact, sans-serif", fontWeight: 900, fontSize: 52, letterSpacing: 1, color: "#EDE0CC", textTransform: "uppercase", textShadow: "2px 2px 0 #3A2A1E" },
   logoSub: { fontFamily: "monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", color: "#A8916F", marginBottom: 28, textAlign: "center" },
@@ -700,7 +742,7 @@ const s = {
   memberPick: { display: "flex", alignItems: "center", gap: 12, background: "#2A2319", border: "1.5px solid", borderRadius: 12, color: "#EDE0CC", fontSize: 16, padding: "10px 14px", cursor: "pointer", textAlign: "left", flex: 1 },
   memberPickName: { fontWeight: 500 },
   avatarMed: { width: 38, height: 38, borderRadius: "50%", objectFit: "cover", flexShrink: 0 },
-  avatarSmall: { width: 26, height: 26, borderRadius: "50%", objectFit: "cover", flexShrink: 0 },
+  avatarSmall: { width: 24, height: 24, borderRadius: "50%", objectFit: "cover", flexShrink: 0 },
   avatarTiny: { width: 14, height: 14, borderRadius: "50%", objectFit: "cover", flexShrink: 0 },
   avatarBadge: { width: 20, height: 20, borderRadius: "50%", objectFit: "cover", flexShrink: 0 },
   avatarPlaceholder: { width: 38, height: 38, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, flexShrink: 0 },
@@ -712,15 +754,11 @@ const s = {
   smallBtn: { background: "#C9744A", border: "none", borderRadius: 8, color: "#1C1812", fontWeight: 600, padding: "10px 14px", fontSize: 13, cursor: "pointer" },
   toastStaticOk: { background: "#26301F", border: "1px solid #6F8068", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#B6C7A8" },
   toastStaticErr: { background: "#2E1E18", border: "1px solid #A3523A", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#D17555" },
-
-  // Header
   header: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "20px 18px 8px", position: "relative", zIndex: 1 },
   logoSmall: { fontFamily: "'Arial Black', Impact, sans-serif", fontWeight: 900, fontSize: 24, color: "#EDE0CC", textTransform: "uppercase" },
   headerSub: { fontFamily: "monospace", fontSize: 9, letterSpacing: 2, textTransform: "uppercase", color: "#8A7A60" },
   youBadge: { display: "flex", alignItems: "center", gap: 6, background: "#2A2319", border: "1.5px solid", borderRadius: 999, color: "#EDE0CC", fontSize: 13, padding: "6px 12px", cursor: "pointer" },
   setlistHeaderBtn: { background: "transparent", border: "1px solid #3A3024", borderRadius: 999, color: "#A8916F", fontSize: 12, padding: "6px 12px", cursor: "pointer" },
-
-  // Kalender
   monthNav: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 18px 4px", position: "relative", zIndex: 1 },
   navBtn: { background: "#2A2319", border: "1px solid #3A3024", borderRadius: 8, color: "#EDE0CC", fontSize: 20, width: 36, height: 36, cursor: "pointer" },
   monthLabel: { fontSize: 17, fontWeight: 600, textTransform: "capitalize" },
@@ -743,12 +781,10 @@ const s = {
   proposalMark: { fontSize: 8, color: "#B5944B", marginLeft: 2 },
   confirmedMark: { fontSize: 8, color: "#6F8068", marginLeft: 2 },
   legend: { display: "flex", flexWrap: "wrap", gap: "8px 14px", padding: "20px 18px 0", position: "relative", zIndex: 1 },
-  legendItem: { display: "flex", alignItems: "center", gap: 6, fontSize: 12 },
-
-  // Aankomende repetities
+  legendItem: { display: "flex", alignItems: "center", gap: 5, fontSize: 12 },
   upcomingBtn: { width: "100%", background: "transparent", border: "1px solid #3A3024", borderRadius: 8, color: "#A8916F", fontSize: 13, padding: "10px 14px", cursor: "pointer", textAlign: "left" },
   upcomingList: { display: "flex", flexDirection: "column", gap: 8, marginTop: 10 },
-  upcomingEmpty: { fontSize: 13, color: "#8A7A60", padding: "12px 0", fontFamily: "monospace" },
+  upcomingEmpty: { fontSize: 13, color: "#8A7A60", padding: "10px 0", fontFamily: "monospace" },
   upcomingRow: { display: "flex", alignItems: "center", justifyContent: "space-between", borderRadius: 10, padding: "12px 14px", gap: 10 },
   upcomingProposalRow: { background: "#2A2310", border: "1.5px solid #B5944B44" },
   upcomingConfirmedRow: { background: "#1E2A1A", border: "1.5px solid #6F806844" },
@@ -758,21 +794,18 @@ const s = {
   upcomingBy: { fontSize: 11, color: "#8A7A60", marginTop: 2 },
   tagConfirmed: { fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: "#6F8068", background: "#1A2618", border: "1px solid #6F806866", borderRadius: 6, padding: "3px 7px", flexShrink: 0 },
   tagProposal: { fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: "#B5944B", background: "#251E0D", border: "1px solid #B5944B66", borderRadius: 6, padding: "3px 7px", flexShrink: 0 },
-
-  // Toasts
   savingToast: { position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#2A2319", border: "1px solid #4A3F2E", borderRadius: 999, padding: "6px 14px", fontSize: 12, color: "#A8916F", zIndex: 60 },
   okToast: { position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#26301F", border: "1px solid #6F8068", borderRadius: 999, padding: "6px 14px", fontSize: 12, color: "#B6C7A8", zIndex: 60 },
   errorToast: { position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#2E1E18", border: "1px solid #A3523A", borderRadius: 999, padding: "6px 14px", fontSize: 12, color: "#D17555", zIndex: 60 },
-
-  // Sheet
   sheetOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "flex-end", zIndex: 50 },
   sheet: { width: "100%", maxWidth: 480, margin: "0 auto", background: "#241F17", borderRadius: "18px 18px 0 0", padding: "10px 22px 26px", display: "flex", flexDirection: "column", gap: 10, maxHeight: "85vh", overflowY: "auto" },
   sheetHandle: { width: 36, height: 4, borderRadius: 2, background: "#4A3F2E", alignSelf: "center", marginBottom: 6 },
   sheetDate: { fontSize: 17, fontWeight: 600 },
   sheetDivider: { borderTop: "1px solid #3A3024", margin: "4px 0" },
-  whoList: { display: "flex", flexDirection: "column", gap: 8, padding: "8px 0", borderTop: "1px solid #3A3024", borderBottom: "1px solid #3A3024" },
+  unavailableBox: { background: "#2A1A1A", border: "1px solid #5A2A2A", borderRadius: 10, padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8 },
+  unavailableLabel: { fontSize: 12, fontWeight: 700, color: "#D17555", letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 2 },
   whoRow: { display: "flex", alignItems: "center", gap: 8, fontSize: 14 },
-  whoName: { fontWeight: 500 },
+  whoName: { fontWeight: 600 },
   whoNote: { color: "#A8916F", fontSize: 13 },
   sheetActionLabel: { fontSize: 13, color: "#A8916F", marginTop: 2 },
   noteInput: { background: "#1C1812", border: "1px solid #4A3F2E", borderRadius: 8, color: "#EDE0CC", padding: "10px 12px", fontSize: 14 },
@@ -790,8 +823,6 @@ const s = {
   proposalConfirmBtn: { border: "none", borderRadius: 8, fontSize: 11, fontWeight: 600, padding: "8px 10px", cursor: "pointer", whiteSpace: "nowrap" },
   proposalDeleteBtn: { background: "transparent", border: "none", color: "#6A5A45", fontSize: 14, cursor: "pointer", padding: "4px 6px" },
   proposalForm: { display: "flex", gap: 8, marginTop: 4 },
-
-  // Setlist
   setlistList: { display: "flex", flexDirection: "column", gap: 6 },
   setlistRow: { background: "#1C1812", border: "1px solid #3A3024", borderRadius: 10, padding: "12px 14px", userSelect: "none" },
   setlistTop: { display: "flex", alignItems: "center", gap: 10 },
@@ -800,17 +831,24 @@ const s = {
   setlistArtist: { fontSize: 12, color: "#8A7A60", marginTop: 2 },
   docsToggleBtn: { fontSize: 11, color: "#A8916F", background: "#2A2319", border: "1px solid #3A3024", borderRadius: 6, padding: "5px 10px", cursor: "pointer", flexShrink: 0 },
   dragHandle: { fontSize: 16, color: "#4A3F2E", cursor: "grab", flexShrink: 0 },
-
-  // Docs paneel
   docsPanel: { marginTop: 12, paddingTop: 12, borderTop: "1px solid #3A3024", display: "flex", flexDirection: "column", gap: 8 },
   docList: { display: "flex", flexDirection: "column", gap: 6 },
   docRow: { display: "flex", alignItems: "center", gap: 8, background: "#241F17", borderRadius: 8, padding: "8px 10px" },
   docIcon: { fontSize: 16, flexShrink: 0 },
   docLink: { flex: 1, fontSize: 13, color: "#B5944B", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   docDeleteBtn: { background: "transparent", border: "none", color: "#6A5A45", fontSize: 14, cursor: "pointer", padding: "2px 4px", flexShrink: 0 },
-  uploadArea: { display: "flex", alignItems: "center", justifyContent: "center", background: "#1C1812", border: "1px dashed #4A3F2E", borderRadius: 8, padding: "12px", fontSize: 13, color: "#8A7A60", cursor: "pointer", textAlign: "center" },
+  uploadArea: { display: "flex", alignItems: "center", justifyContent: "center", background: "#1C1812", border: "1px dashed #4A3F2E", borderRadius: 8, padding: "12px", fontSize: 13, color: "#8A7A60", cursor: "pointer" },
   linkRow: { display: "flex", alignItems: "center", gap: 8 },
   linkIcon: { fontSize: 14, flexShrink: 0, width: 20, textAlign: "center" },
   linkInput: { flex: 1, background: "#1C1812", border: "1px solid #3A3024", borderRadius: 8, color: "#EDE0CC", padding: "8px 10px", fontSize: 13 },
   linkOpenBtn: { background: "#251E0D", border: "1px solid #B5944B44", borderRadius: 6, color: "#B5944B", fontSize: 13, padding: "6px 10px", textDecoration: "none", flexShrink: 0 },
+  proposalSectionHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "2px solid #3A3024", paddingTop: 12, marginTop: 4 },
+  proposalSectionTitle: { fontSize: 14, fontWeight: 700, color: "#B5944B" },
+  proposeBtn: { fontSize: 12, background: "transparent", border: "1px solid #B5944B66", borderRadius: 8, color: "#B5944B", padding: "6px 12px", cursor: "pointer" },
+  proposeForm: { display: "flex", flexDirection: "column", gap: 8, background: "#1C1812", border: "1px solid #B5944B44", borderRadius: 10, padding: "14px" },
+  songProposalRow: { background: "#1C1510", border: "1.5px dashed #B5944B66", borderRadius: 10, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 },
+  proposalBadge: { fontSize: 9, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", color: "#B5944B", background: "#251E0D", border: "1px solid #B5944B44", borderRadius: 4, padding: "2px 6px", flexShrink: 0 },
+  proposalMotivation: { fontSize: 12, color: "#A8916F", fontStyle: "italic", marginTop: 3 },
+  songProposalActions: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
+  approveBtn: { fontSize: 12, background: "#26301F", border: "1px solid #6F806866", borderRadius: 8, color: "#6F8068", padding: "6px 12px", cursor: "pointer", fontWeight: 600 },
 };
