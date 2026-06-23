@@ -46,8 +46,8 @@ function getMonthGrid(year, month) {
   while (cells.length % 7 !== 0) cells.push(null);
   return cells;
 }
-function makeICSUrl(date, time, label) {
-  const params = new URLSearchParams({ date, time, ...(label ? { label } : {}) });
+function makeICSUrl(date, time, label, songTitles) {
+  const params = new URLSearchParams({ date, time, ...(label ? { label } : {}), ...(songTitles?.length ? { songs: songTitles.join(", ") } : {}) });
   return `/api/cal?${params.toString()}`;
 }
 function makeGCalUrl(date, time, label) {
@@ -78,6 +78,8 @@ export default function ShterKalender() {
   const [songs, setSongs] = useState([]);
   const [songDocs, setSongDocs] = useState({});
   const [songProposals, setSongProposals] = useState([]);
+  const [rehearsalSongs, setRehearsalSongs] = useState({});
+  const [editingProposal, setEditingProposal] = useState(null);
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -114,6 +116,7 @@ export default function ShterKalender() {
       { data: songRows, error: sErr },
       { data: docRows, error: dErr },
       { data: spRows, error: spErr },
+      { data: rsRows },
     ] = await Promise.all([
       supabase.from("members").select("*").order("sort_order"),
       supabase.from("blocks").select("*"),
@@ -121,6 +124,7 @@ export default function ShterKalender() {
       supabase.from("songs").select("*").order("sort_order"),
       supabase.from("song_documents").select("*").order("created_at"),
       supabase.from("song_proposals").select("*").order("created_at"),
+      supabase.from("rehearsal_songs").select("*"),
     ]);
 
     if (mErr || bErr || pErr || sErr || dErr || spErr) {
@@ -131,6 +135,13 @@ export default function ShterKalender() {
     setMembers(memberRows || []);
     setSongs(songRows || []);
     setSongProposals(spRows || []);
+
+    const rsMap = {};
+    for (const row of rsRows || []) {
+      if (!rsMap[row.proposal_id]) rsMap[row.proposal_id] = [];
+      rsMap[row.proposal_id].push(row.song_id);
+    }
+    setRehearsalSongs(rsMap);
 
     const docsMap = {};
     for (const row of docRows || []) {
@@ -164,6 +175,7 @@ export default function ShterKalender() {
       .on("postgres_changes", { event: "*", schema: "public", table: "songs" }, loadAll)
       .on("postgres_changes", { event: "*", schema: "public", table: "song_documents" }, loadAll)
       .on("postgres_changes", { event: "*", schema: "public", table: "song_proposals" }, loadAll)
+      .on("postgres_changes", { event: "*", schema: "public", table: "rehearsal_songs" }, loadAll)
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [loadAll]);
@@ -201,6 +213,21 @@ export default function ShterKalender() {
 
   async function saveSongLink(songId, field, url) {
     await supabase.from("songs").update({ [field]: url || null }).eq("id", songId);
+    await loadAll();
+  }
+
+  async function toggleRehearsalSong(proposalId, songId, checked) {
+    if (checked) {
+      await supabase.from("rehearsal_songs").insert({ proposal_id: proposalId, song_id: songId });
+    } else {
+      await supabase.from("rehearsal_songs").delete().eq("proposal_id", proposalId).eq("song_id", songId);
+    }
+    await loadAll();
+  }
+
+  async function updateProposal(id, time, label) {
+    await supabase.from("proposals").update({ time, label: label || "" }).eq("id", id);
+    setEditingProposal(null);
     await loadAll();
   }
 
@@ -547,26 +574,34 @@ export default function ShterKalender() {
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
                       <span style={p.confirmed ? s.tagConfirmed : s.tagProposal}>{p.confirmed ? "definitief" : "voorstel"}</span>
-                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                        <a href={makeICSUrl(p.date, p.time, p.label)} style={s.calBtn} title="Toevoegen aan iPhone/iCal agenda">📅 iCal</a>
-                        <a href={makeGCalUrl(p.date, p.time, p.label)} target="_blank" rel="noreferrer" style={s.calBtn} title="Toevoegen aan Google agenda">📅 Google</a>
-                        {(() => {
-                          const [y, mo, d] = p.date.split("-");
-                          const dow = DAY_NAMES_FULL[new Date(parseInt(y), parseInt(mo)-1, parseInt(d)).getDay()];
-                          const dateStr = `${dow} ${parseInt(d)} ${MONTH_NAMES[parseInt(mo)-1]}`;
-                          const afwezig = Object.keys(blocks[p.date] || {});
-                          let msg = `🎸 SHTER repetitie herinnering\n📅 ${dateStr}\n🕐 ${p.time}${p.label ? `\n📍 ${p.label}` : ""}`;
-                          if (afwezig.length) msg += `\n🚫 Kan niet: ${afwezig.join(", ")}`;
-                          msg += "\n\nWie is er?";
-                          return (
+                      {(() => {
+                        const rSongs = (rehearsalSongs[p.id] || []).map(sid => songs.find(s => s.id === sid)).filter(Boolean);
+                        const songTitles = rSongs.map(s => s.title);
+                        const [y, mo, d] = p.date.split("-");
+                        const dow = DAY_NAMES_FULL[new Date(parseInt(y), parseInt(mo)-1, parseInt(d)).getDay()];
+                        const dateLabel = `${dow} ${parseInt(d)} ${MONTH_NAMES[parseInt(mo)-1]}`;
+                        const afwezig = Object.keys(blocks[p.date] || {});
+                        let msg = `🎸 SHTER repetitie herinnering\n📅 ${dateLabel}\n🕐 ${p.time}${p.label ? `\n📍 ${p.label}` : ""}`;
+                        if (songTitles.length) msg += `\n\n🎵 Nummers:\n${songTitles.map(t => `• ${t}`).join("\n")}`;
+                        if (afwezig.length) msg += `\n\n🚫 Kan niet: ${afwezig.join(", ")}`;
+                        msg += "\n\nWie is er?";
+                        return (
+                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                            {songTitles.length > 0 && (
+                              <div style={{ width: "100%", fontSize: 11, color: "#8A7A60", textAlign: "right", marginBottom: 2 }}>
+                                🎵 {songTitles.join(", ")}
+                              </div>
+                            )}
+                            <a href={makeICSUrl(p.date, p.time, p.label, songTitles)} style={s.calBtn} title="Toevoegen aan iPhone/iCal agenda">📅 iCal</a>
+                            <a href={makeGCalUrl(p.date, p.time, p.label)} target="_blank" rel="noreferrer" style={s.calBtn} title="Toevoegen aan Google agenda">📅 Google</a>
                             <a href={`https://wa.me/?text=${encodeURIComponent(msg)}`} target="_blank" rel="noreferrer"
                               style={{ ...s.calBtn, background: "#1A2B1A", borderColor: "#2A5A2A", color: "#5CB85C" }}
                               title="Stuur herinnering via WhatsApp">
                               💬 WhatsApp
                             </a>
-                          );
-                        })()}
-                      </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 );
@@ -622,23 +657,69 @@ export default function ShterKalender() {
             <div style={s.sheetActionLabel}>Repetitietijd voorstellen</div>
             {(proposals[selectedDay] || []).length > 0 && (
               <div style={s.proposalList}>
-                {(proposals[selectedDay] || []).slice().sort((a, b) => a.time.localeCompare(b.time)).map((p) => (
-                  <div key={p.id} style={{ ...s.proposalRow, ...(p.confirmed ? { borderColor: "#6F8068", background: "#1E2A1A" } : {}) }}>
-                    <div style={s.proposalInfo}>
-                      <span style={s.proposalTime}>{p.time}</span>
-                      {p.label && <span style={s.proposalLabel}>{p.label}</span>}
-                      <span style={s.proposalBy}>door {p.by}</span>
-                      {p.confirmed && <span style={s.proposalConfirmedTag}>definitief</span>}
+                {(proposals[selectedDay] || []).slice().sort((a, b) => a.time.localeCompare(b.time)).map((p) => {
+                  const isEditing = editingProposal?.id === p.id;
+                  const checkedSongs = rehearsalSongs[p.id] || [];
+                  return (
+                    <div key={p.id} style={{ ...s.proposalRow, ...(p.confirmed ? { borderColor: "#6F8068", background: "#1E2A1A" } : {}), flexDirection: "column", gap: 8 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                        <div style={s.proposalInfo}>
+                          {isEditing ? (
+                            <>
+                              <input type="time" defaultValue={p.time} id={`edit-time-${p.id}`} style={{ ...s.noteInput, flex: "0 0 100px", fontSize: 13, padding: "4px 8px" }} />
+                              <input defaultValue={p.label} id={`edit-label-${p.id}`} placeholder="locatie" style={{ ...s.noteInput, flex: 1, fontSize: 13, padding: "4px 8px" }} />
+                            </>
+                          ) : (
+                            <>
+                              <span style={s.proposalTime}>{p.time}</span>
+                              {p.label && <span style={s.proposalLabel}>{p.label}</span>}
+                              <span style={s.proposalBy}>door {p.by}</span>
+                              {p.confirmed && <span style={s.proposalConfirmedTag}>definitief</span>}
+                            </>
+                          )}
+                        </div>
+                        <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                          {isEditing ? (
+                            <>
+                              <button style={{ ...s.proposalConfirmBtn, background: myColor, color: "#1C1812" }}
+                                onClick={() => updateProposal(p.id, document.getElementById(`edit-time-${p.id}`).value, document.getElementById(`edit-label-${p.id}`).value)}>
+                                opslaan
+                              </button>
+                              <button style={s.proposalDeleteBtn} onClick={() => setEditingProposal(null)}>✕</button>
+                            </>
+                          ) : (
+                            <>
+                              <button style={{ ...s.proposalDeleteBtn, fontSize: 12 }} onClick={() => setEditingProposal({ id: p.id, time: p.time, label: p.label })}>✎</button>
+                              <button style={{ ...s.proposalConfirmBtn, ...(p.confirmed ? { background: "#3A3024", color: "#EDE0CC" } : { background: myColor, color: "#1C1812" }) }}
+                                onClick={() => toggleConfirmProposal(p.id, p.confirmed)}>
+                                {p.confirmed ? "annuleer" : "maak definitief"}
+                              </button>
+                              <button style={s.proposalDeleteBtn} onClick={() => removeProposal(p.id)}>✕</button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      {songs.length > 0 && (
+                        <div style={{ borderTop: "1px solid #2E2820", paddingTop: 8 }}>
+                          <div style={{ fontSize: 11, color: "#8A7A60", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Nummers voor deze repetitie</div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                            {songs.map((song) => {
+                              const checked = checkedSongs.includes(song.id);
+                              return (
+                                <label key={song.id} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: checked ? "#EDE0CC" : "#8A7A60" }}>
+                                  <input type="checkbox" checked={checked} onChange={(e) => toggleRehearsalSong(p.id, song.id, e.target.checked)}
+                                    style={{ accentColor: myColor, width: 15, height: 15 }} />
+                                  <span>{song.title}</span>
+                                  <span style={{ fontSize: 11, opacity: 0.6 }}>— {song.artist}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <div style={s.proposalActions}>
-                      <button style={{ ...s.proposalConfirmBtn, ...(p.confirmed ? { background: "#3A3024", color: "#EDE0CC" } : { background: myColor, color: "#1C1812" }) }}
-                        onClick={() => toggleConfirmProposal(p.id, p.confirmed)}>
-                        {p.confirmed ? "annuleer" : "maak definitief"}
-                      </button>
-                      <button style={s.proposalDeleteBtn} onClick={() => removeProposal(p.id)}>✕</button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             <div style={s.proposalForm}>

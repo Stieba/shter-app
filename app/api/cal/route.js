@@ -3,6 +3,7 @@ export async function GET(request) {
   const date = searchParams.get("date") || "";
   const time = searchParams.get("time") || "20:00";
   const label = searchParams.get("label") || "";
+  const songs = searchParams.get("songs") || "";
 
   const [y, mo, d] = date.split("-");
   const [h, mi] = time.split(":");
@@ -13,7 +14,7 @@ export async function GET(request) {
   const end = `${y}${p2(mo)}${p2(d)}T${endH}${p2(mi)}00`;
   const title = label ? `SHTER repetitie — ${label}` : "SHTER repetitie";
 
-  const ics = [
+  const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
     "PRODID:-//SHTER//Bandplanning//NL",
@@ -24,9 +25,10 @@ export async function GET(request) {
     `DTEND:${end}`,
     `SUMMARY:${title}`,
     `UID:shter-${date}-${time}@shter.app`,
-    "END:VEVENT",
-    "END:VCALENDAR",
-  ].join("\r\n");
+  ];
+  if (songs) lines.push(`DESCRIPTION:Nummers: ${songs}`);
+  lines.push("END:VEVENT", "END:VCALENDAR");
+  const ics = lines.join("\r\n");
 
   return new Response(ics, {
     headers: {
