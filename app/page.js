@@ -73,6 +73,7 @@ export default function ShterKalender() {
 
   const [proposalTimeDraft, setProposalTimeDraft] = useState("20:00");
   const [proposalLabelDraft, setProposalLabelDraft] = useState("");
+  const [showUpcoming, setShowUpcoming] = useState(false);
 
   const bannerTimer = useRef(null);
   function flashBanner(text, tone = "ok") {
@@ -406,6 +407,8 @@ export default function ShterKalender() {
           const isToday = key === tKey;
           const dayProposals = proposals[key] || [];
           const inRangeSelection = (rangeStart === key && !rangeEnd) || (rangeSet && rangeSet.has(key));
+          const hasConfirmed = dayProposals.some((p) => p.confirmed);
+          const hasProposal = dayProposals.length > 0 && !hasConfirmed;
 
           return (
             <button
@@ -414,7 +417,9 @@ export default function ShterKalender() {
               style={{
                 ...styles.dayCell,
                 ...(isToday ? styles.todayCell : {}),
-                ...(iAmBlocked ? { background: myColor + "22", borderColor: myColor } : {}),
+                ...(hasProposal ? { borderColor: "#B5944B", borderWidth: 2 } : {}),
+                ...(hasConfirmed ? { borderColor: "#6F8068", borderWidth: 2, background: "#1E2A1A" } : {}),
+                ...(iAmBlocked ? { background: hasConfirmed ? "#1E2A1A" : myColor + "22", borderColor: iAmBlocked && !hasConfirmed && !hasProposal ? myColor : undefined } : {}),
                 ...(inRangeSelection ? { background: myColor + "55", borderColor: myColor, borderWidth: 2 } : {}),
               }}
             >
@@ -424,8 +429,11 @@ export default function ShterKalender() {
                   <span key={name} style={{ ...styles.pill, background: colorFor(name) }} />
                 ))}
                 {blockedNames.length > 4 && <span style={styles.pillMore}>+{blockedNames.length - 4}</span>}
-                {dayProposals.length > 0 && (
-                  <span style={styles.clockMark}>{dayProposals.some((p) => p.confirmed) ? "●" : "○"}</span>
+                {dayProposals.some((p) => p.confirmed) && (
+                  <span style={styles.confirmedMark} title="definitieve repetitie">●</span>
+                )}
+                {dayProposals.length > 0 && !dayProposals.some((p) => p.confirmed) && (
+                  <span style={styles.proposalMark} title="voorstel repetitie">◎</span>
                 )}
               </div>
             </button>
@@ -440,6 +448,58 @@ export default function ShterKalender() {
             <span style={{ opacity: m.name === currentMember ? 1 : 0.6 }}>{m.name}</span>
           </div>
         ))}
+        <div style={styles.legendItem}>
+          <span style={{ ...styles.proposalMark, fontSize: 10 }}>◎</span>
+          <span style={{ opacity: 0.6, fontSize: 12 }}>voorstel</span>
+        </div>
+        <div style={styles.legendItem}>
+          <span style={{ ...styles.confirmedMark, fontSize: 10 }}>●</span>
+          <span style={{ opacity: 0.6, fontSize: 12 }}>definitief</span>
+        </div>
+      </div>
+
+      <div style={{ padding: "12px 18px 0" }}>
+        <button
+          style={styles.upcomingBtn}
+          onClick={() => setShowUpcoming((v) => !v)}
+        >
+          {showUpcoming ? "▲" : "▼"} aankomende repetities
+        </button>
+        {showUpcoming && (() => {
+          const tk = todayKey();
+          const upcoming = Object.entries(proposals)
+            .filter(([date]) => date >= tk)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .flatMap(([date, props]) => props.map((p) => ({ date, ...p })));
+          if (upcoming.length === 0) {
+            return <div style={styles.upcomingEmpty}>geen aankomende repetities gepland</div>;
+          }
+          return (
+            <div style={styles.upcomingList}>
+              {upcoming.map((p) => {
+                const [y, m, d] = p.date.split("-");
+                const dateStr = `${parseInt(d, 10)} ${MONTH_NAMES[parseInt(m, 10) - 1]} ${y}`;
+                return (
+                  <div key={p.id} style={{ ...styles.upcomingRow, ...(p.confirmed ? styles.upcomingConfirmedRow : styles.upcomingProposalRow) }}>
+                    <div style={styles.upcomingLeft}>
+                      <span style={p.confirmed ? styles.confirmedMark : styles.proposalMark}>
+                        {p.confirmed ? "●" : "◎"}
+                      </span>
+                      <div>
+                        <div style={styles.upcomingDate}>{dateStr}</div>
+                        <div style={styles.upcomingTime}>{p.time}{p.label ? ` — ${p.label}` : ""}</div>
+                        <div style={styles.upcomingBy}>voorgesteld door {p.by}</div>
+                      </div>
+                    </div>
+                    <span style={p.confirmed ? styles.upcomingTagConfirmed : styles.upcomingTagProposal}>
+                      {p.confirmed ? "definitief" : "voorstel"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </div>
 
       {saving && <div style={styles.savingToast}>opslaan…</div>}
@@ -598,6 +658,20 @@ const styles = {
   pill: { width: 5, height: 5, borderRadius: "50%" },
   pillMore: { fontSize: 8, color: "#A8916F", marginLeft: 1 },
   clockMark: { fontSize: 7, color: "#C9744A", marginLeft: 2 },
+  proposalMark: { fontSize: 8, color: "#B5944B", marginLeft: 2 },
+  confirmedMark: { fontSize: 8, color: "#6F8068", marginLeft: 2 },
+  upcomingBtn: { width: "100%", background: "transparent", border: "1px solid #3A3024", borderRadius: 8, color: "#A8916F", fontSize: 13, padding: "10px 14px", cursor: "pointer", textAlign: "left" },
+  upcomingList: { display: "flex", flexDirection: "column", gap: 8, marginTop: 10 },
+  upcomingEmpty: { fontSize: 13, color: "#8A7A60", padding: "12px 0", fontFamily: "monospace" },
+  upcomingRow: { display: "flex", alignItems: "center", justifyContent: "space-between", borderRadius: 10, padding: "12px 14px", gap: 10 },
+  upcomingProposalRow: { background: "#2A2310", border: "1.5px solid #B5944B44" },
+  upcomingConfirmedRow: { background: "#1E2A1A", border: "1.5px solid #6F806844" },
+  upcomingLeft: { display: "flex", alignItems: "flex-start", gap: 10 },
+  upcomingDate: { fontSize: 14, fontWeight: 600, color: "#EDE0CC" },
+  upcomingTime: { fontSize: 13, color: "#C2B299", fontFamily: "monospace", marginTop: 2 },
+  upcomingBy: { fontSize: 11, color: "#8A7A60", marginTop: 2 },
+  upcomingTagConfirmed: { fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: "#6F8068", background: "#1A2618", border: "1px solid #6F806866", borderRadius: 6, padding: "3px 7px", flexShrink: 0 },
+  upcomingTagProposal: { fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: "#B5944B", background: "#251E0D", border: "1px solid #B5944B66", borderRadius: 6, padding: "3px 7px", flexShrink: 0 },
   legend: { display: "flex", flexWrap: "wrap", gap: "8px 14px", padding: "20px 18px 0" },
   legendItem: { display: "flex", alignItems: "center", gap: 6, fontSize: 12 },
   savingToast: { position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#2A2319", border: "1px solid #4A3F2E", borderRadius: 999, padding: "6px 14px", fontSize: 12, color: "#A8916F", zIndex: 60 },
