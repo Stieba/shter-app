@@ -46,17 +46,9 @@ function getMonthGrid(year, month) {
   while (cells.length % 7 !== 0) cells.push(null);
   return cells;
 }
-function makeICSDataUrl(date, time, label) {
-  const [y, mo, d] = date.split("-");
-  const [h, mi] = time.split(":");
-  const p2 = (n) => String(n).padStart(2, "0");
-  const start = `${y}${p2(mo)}${p2(d)}T${p2(h)}${p2(mi)}00`;
-  const endH = String(parseInt(h) + 2).padStart(2, "0");
-  const end = `${y}${p2(mo)}${p2(d)}T${endH}${p2(mi)}00`;
-  const title = label ? `SHTER repetitie — ${label}` : "SHTER repetitie";
-  const ics = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//SHTER//NL","BEGIN:VEVENT",
-    `DTSTART:${start}`,`DTEND:${end}`,`SUMMARY:${title}`,"END:VEVENT","END:VCALENDAR"].join("\r\n");
-  return "data:text/calendar;charset=utf-8," + encodeURIComponent(ics);
+function makeICSUrl(date, time, label) {
+  const params = new URLSearchParams({ date, time, ...(label ? { label } : {}) });
+  return `/api/cal?${params.toString()}`;
 }
 function makeGCalUrl(date, time, label) {
   const [y, mo, d] = date.split("-");
@@ -543,7 +535,7 @@ export default function ShterKalender() {
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
                       <span style={p.confirmed ? s.tagConfirmed : s.tagProposal}>{p.confirmed ? "definitief" : "voorstel"}</span>
                       <div style={{ display: "flex", gap: 4 }}>
-                        <a href={makeICSDataUrl(p.date, p.time, p.label)} download="repetitie.ics" style={s.calBtn} title="Toevoegen aan iPhone/iCal agenda">📅 iCal</a>
+                        <a href={makeICSUrl(p.date, p.time, p.label)} style={s.calBtn} title="Toevoegen aan iPhone/iCal agenda">📅 iCal</a>
                         <a href={makeGCalUrl(p.date, p.time, p.label)} target="_blank" rel="noreferrer" style={s.calBtn} title="Toevoegen aan Google agenda">📅 Google</a>
                       </div>
                     </div>
