@@ -572,7 +572,7 @@ export default function ShterKalender() {
                         })()}
                       </div>
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, flexShrink: 0 }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
                       <span style={p.confirmed ? s.tagConfirmed : s.tagProposal}>{p.confirmed ? "definitief" : "voorstel"}</span>
                       {(() => {
                         const rSongs = (rehearsalSongs[p.id] || []).map(sid => songs.find(s => s.id === sid)).filter(Boolean);
@@ -584,11 +584,10 @@ export default function ShterKalender() {
                         let msg = `🎸 SHTER repetitie herinnering\n📅 ${dateLabel}\n🕐 ${p.time}${p.label ? `\n📍 ${p.label}` : ""}`;
                         if (songTitles.length) msg += `\n\n🎵 Nummers:\n${songTitles.map(t => `• ${t}`).join("\n")}`;
                         if (afwezig.length) msg += `\n\n🚫 Kan niet: ${afwezig.join(", ")}`;
-                        msg += "\n\nWie is er?";
                         return (
-                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                             {songTitles.length > 0 && (
-                              <div style={{ width: "100%", fontSize: 11, color: "#8A7A60", textAlign: "right", marginBottom: 2 }}>
+                              <div style={{ width: "100%", fontSize: 11, color: "#8A7A60", marginBottom: 2 }}>
                                 🎵 {songTitles.join(", ")}
                               </div>
                             )}
@@ -932,7 +931,7 @@ const s = {
   upcomingBtn: { width: "100%", background: "transparent", border: "1px solid #3A3024", borderRadius: 8, color: "#A8916F", fontSize: 13, padding: "10px 14px", cursor: "pointer", textAlign: "left" },
   upcomingList: { display: "flex", flexDirection: "column", gap: 8, marginTop: 10 },
   upcomingEmpty: { fontSize: 13, color: "#8A7A60", padding: "10px 0", fontFamily: "monospace" },
-  upcomingRow: { display: "flex", alignItems: "center", justifyContent: "space-between", borderRadius: 10, padding: "12px 14px", gap: 10 },
+  upcomingRow: { display: "flex", flexDirection: "column", borderRadius: 10, padding: "12px 14px", gap: 10 },
   upcomingProposalRow: { background: "#2A2310", border: "1.5px solid #B5944B44" },
   upcomingConfirmedRow: { background: "#1E2A1A", border: "1.5px solid #6F806844" },
   upcomingLeft: { display: "flex", alignItems: "flex-start", gap: 10 },
