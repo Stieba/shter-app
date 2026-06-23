@@ -511,6 +511,11 @@ export default function ShterKalender() {
                         <div style={s.upcomingDate}>{dateStr}</div>
                         <div style={s.upcomingTime}>{p.time}{p.label ? ` — ${p.label}` : ""}</div>
                         <div style={s.upcomingBy}>door {p.by}</div>
+                        {(() => {
+                          const afwezig = Object.keys(blocks[p.date] || {});
+                          if (!afwezig.length) return null;
+                          return <div style={s.upcomingAbsent}>🚫 {afwezig.join(", ")}</div>;
+                        })()}
                       </div>
                     </div>
                     <span style={p.confirmed ? s.tagConfirmed : s.tagProposal}>{p.confirmed ? "definitief" : "voorstel"}</span>
@@ -794,6 +799,7 @@ const s = {
   upcomingDate: { fontSize: 14, fontWeight: 600, color: "#EDE0CC" },
   upcomingTime: { fontSize: 13, color: "#C2B299", fontFamily: "monospace", marginTop: 2 },
   upcomingBy: { fontSize: 11, color: "#8A7A60", marginTop: 2 },
+  upcomingAbsent: { fontSize: 11, color: "#D17555", marginTop: 3 },
   tagConfirmed: { fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: "#6F8068", background: "#1A2618", border: "1px solid #6F806866", borderRadius: 6, padding: "3px 7px", flexShrink: 0 },
   tagProposal: { fontSize: 10, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: "#B5944B", background: "#251E0D", border: "1px solid #B5944B66", borderRadius: 6, padding: "3px 7px", flexShrink: 0 },
   savingToast: { position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", background: "#2A2319", border: "1px solid #4A3F2E", borderRadius: 999, padding: "6px 14px", fontSize: 12, color: "#A8916F", zIndex: 60 },
