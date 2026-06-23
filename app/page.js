@@ -8,6 +8,7 @@ const MONTH_NAMES = [
   "juli", "augustus", "september", "oktober", "november", "december"
 ];
 const DAY_NAMES = ["ma", "di", "wo", "do", "vr", "za", "zo"];
+const DAY_NAMES_FULL = ["zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"];
 
 function pad(n) { return n.toString().padStart(2, "0"); }
 function dateKey(y, m, d) { return `${y}-${pad(m + 1)}-${pad(d)}`; }
@@ -500,7 +501,8 @@ export default function ShterKalender() {
             <div style={s.upcomingList}>
               {upcoming.map((p) => {
                 const [y, mo, d] = p.date.split("-");
-                const dateStr = `${parseInt(d)} ${MONTH_NAMES[parseInt(mo) - 1]} ${y}`;
+                const dayOfWeek = DAY_NAMES_FULL[new Date(parseInt(y), parseInt(mo) - 1, parseInt(d)).getDay()];
+                const dateStr = `${dayOfWeek} ${parseInt(d)} ${MONTH_NAMES[parseInt(mo) - 1]} ${y}`;
                 return (
                   <div key={p.id} style={{ ...s.upcomingRow, ...(p.confirmed ? s.upcomingConfirmedRow : s.upcomingProposalRow) }}>
                     <div style={s.upcomingLeft}>
