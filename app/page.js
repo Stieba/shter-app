@@ -518,8 +518,6 @@ export default function ShterKalender() {
                   <span key={name} style={{ ...s.pill, background: colorFor(name) }} />
                 ))}
                 {blockedNames.length > 4 && <span style={s.pillMore}>+{blockedNames.length - 4}</span>}
-                {hasConfirmed && <span style={s.confirmedMark}>●</span>}
-                {hasProposal && <span style={s.proposalMark}>◎</span>}
               </div>
             </button>
           );
